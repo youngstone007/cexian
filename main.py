@@ -31,10 +31,6 @@ class VerticalLine:
     - y_end  : 采集终点
     - direction = +1 表示沿 +Y 方向采集
     - direction = -1 表示沿 -Y 方向采集
-
-    要求：
-    - 若 direction = +1, 则通常 y_end > y_start
-    - 若 direction = -1, 则通常 y_end < y_start
     """
     x: float
     y_start: float
@@ -85,17 +81,13 @@ class TurnCandidate:
     total_cost: float
 
 
-# =========================
-# W = 2R 独立半圆分支数据结构
-# =========================
-
 @dataclass
 class SemicircleTurnPath:
     valid: bool = False
     path_type: str = "SEMICIRCLE_W_EQ_2R"
 
-    start_point: Optional[Point] = None      # EOL_geom
-    end_point: Optional[Point] = None        # SOL_geom
+    start_point: Optional[Point] = None
+    end_point: Optional[Point] = None
 
     semicircle_start: Optional[Point] = None
     semicircle_end: Optional[Point] = None
@@ -108,7 +100,7 @@ class SemicircleTurnPath:
     total_length: float = 0.0
     total_time: float = 0.0
 
-    turn_direction: str = ""   # 'L' or 'R'
+    turn_direction: str = ""
 
 
 @dataclass
@@ -120,6 +112,53 @@ class SemicircleTurnCandidate:
     eol_geom: State
     sol_geom: State
     semi: SemicircleTurnPath
+    total_cost: float
+
+
+@dataclass
+class ThreeArcTurnPath:
+    valid: bool = False
+    path_type: str = "THREE_ARC_W_LT_2R"
+
+    start_point: Optional[Point] = None
+    end_point: Optional[Point] = None
+
+    turn_start_point: Optional[Point] = None
+    turn_end_point: Optional[Point] = None
+
+    center1: Optional[Point] = None
+    center2: Optional[Point] = None
+    center3: Optional[Point] = None
+
+    join12: Optional[Point] = None
+    join23: Optional[Point] = None
+
+    arc_a_angle: float = 0.0
+    arc_b_angle: float = 0.0
+    arc_c_angle: float = 0.0
+
+    arc_a_length: float = 0.0
+    arc_b_length: float = 0.0
+    arc_c_length: float = 0.0
+
+    pre_straight_length: float = 0.0
+    post_straight_length: float = 0.0
+
+    total_length: float = 0.0
+    total_time: float = 0.0
+
+    turn_sequence: str = ""
+
+
+@dataclass
+class ThreeArcTurnCandidate:
+    eol_data_y: float
+    sol_data_y: float
+    eol_data_point: Point
+    sol_data_point: Point
+    eol_geom: State
+    sol_geom: State
+    three_arc: ThreeArcTurnPath
     total_cost: float
 
 
@@ -189,9 +228,6 @@ def normalize(vx: float, vy: float) -> Optional[Tuple[float, float]]:
 
 
 def point_is_ahead_along_heading(p_from: Point, heading: float, p_to: Point, tol: float = 1e-9) -> bool:
-    """
-    判断 p_to 是否位于 p_from 沿 heading 的前向半直线上。
-    """
     hx = cos(heading)
     hy = sin(heading)
     vx = p_to.x - p_from.x
@@ -200,7 +236,7 @@ def point_is_ahead_along_heading(p_from: Point, heading: float, p_to: Point, tol
 
 
 # =========================
-# 切向一致性检查
+# CSC 切向一致性检查
 # =========================
 
 def tangent_direction_on_circle(center: Point, point: Point, turn: str) -> Tuple[float, float]:
@@ -244,7 +280,7 @@ def tangent_direction_is_consistent(
 
 
 # =========================
-# 公切线求解
+# CSC 公切线求解
 # =========================
 
 def solve_outer_tangent(c1: Point, c2: Point, R: float, turn: str, debug: bool = False) -> Optional[TangentSolution]:
@@ -437,20 +473,12 @@ def shortest_dubins_csc(
     for path_type in ["LSL", "RSR"]:
         p = solve_one_csc_path(start_state, end_state, R, path_type, speed, debug=debug)
         if p.valid:
-            if debug:
-                print(f"    [VALID] {path_type}: total_length={p.total_length:.3f}")
             candidates.append(p)
-        else:
-            if debug:
-                print(f"    [INVALID] {path_type}")
 
     if not candidates:
         return DubinsPath(valid=False)
 
-    best = min(candidates, key=lambda item: item.total_length)
-    if debug:
-        print(f"    [BEST] {best.path_type}, total_length={best.total_length:.3f}")
-    return best
+    return min(candidates, key=lambda item: item.total_length)
 
 
 # =========================
@@ -462,24 +490,12 @@ def point_on_vertical_line(line: VerticalLine, y: float) -> Point:
 
 
 def build_eol_geom(line1: VerticalLine, eol_data_y: float, L_out: float) -> Tuple[State, Point]:
-    """
-    EOL数据点 = 第一条测线上的离线数据点
-    EOL几何点 = EOL数据点沿测线方向继续走 L_out
-             = Run out 终点
-             = Dubins 转弯起点
-    """
     data_pt = point_on_vertical_line(line1, eol_data_y)
     geom_pt = Point(line1.x, eol_data_y + line1.direction * L_out)
     return State(p=geom_pt, heading=line1.heading), data_pt
 
 
 def build_sol_geom_fixed_head(line2: VerticalLine, L_in: float) -> Tuple[State, Point]:
-    """
-    SOL固定在线头（采集起点）
-    SOL几何点 = 在正式采集前，沿反方向回退 L_in
-             = Run in 起点
-             = Dubins 转弯终点
-    """
     sol_data_y = line2.y_start
     data_pt = point_on_vertical_line(line2, sol_data_y)
     geom_pt = Point(line2.x, sol_data_y - line2.direction * L_in)
@@ -499,15 +515,6 @@ def solve_fixed_head_tail_turn_between_vertical_lines(
     speed: float,
     debug: bool = False
 ) -> Optional[TurnCandidate]:
-    """
-    固定：
-    - 第一条线必须完整跑到线尾 EOL_data = line1.y_end
-    - 第二条线从线头开始上线 SOL_data = line2.y_start
-
-    即：
-    - EOL 不搜索
-    - SOL 不搜索
-    """
     eol_data_y = line1.y_end
     sol_data_y = line2.y_start
 
@@ -531,7 +538,7 @@ def solve_fixed_head_tail_turn_between_vertical_lines(
 
 
 # =========================
-# 独立处理 W = 2R 的换线情形
+# W = 2R 半圆
 # =========================
 
 def solve_w_eq_2r_semicircle(
@@ -542,33 +549,17 @@ def solve_w_eq_2r_semicircle(
     tol: float = 1e-6,
     debug: bool = False
 ) -> SemicircleTurnPath:
-    """
-    独立处理 W = 2R 的临界换线情形。
-
-    路径形式：
-        直线 + 半圆 + 直线
-    其中前后直线某一段可能为 0。
-
-    这里的 start_state / end_state 分别就是：
-    - EOL_geom = Run out 终点
-    - SOL_geom = Run in 起点
-    """
-
     x1, y1 = start_state.p.x, start_state.p.y
     x2, y2 = end_state.p.x, end_state.p.y
 
     W = abs(x2 - x1)
     if abs(W - 2.0 * R) > tol:
-        if debug:
-            print(f"[W=2R SEMI] invalid: W={W:.6f}, 2R={2.0 * R:.6f}")
         return SemicircleTurnPath(valid=False)
 
     h1x, h1y = cos(start_state.heading), sin(start_state.heading)
     h2x, h2y = cos(end_state.heading), sin(end_state.heading)
     heading_dot = h1x * h2x + h1y * h2y
     if heading_dot > -0.99:
-        if debug:
-            print(f"[W=2R SEMI] invalid: headings are not opposite enough, dot={heading_dot:.6f}")
         return SemicircleTurnPath(valid=False)
 
     candidate_y_stars = [y1, y2]
@@ -580,13 +571,9 @@ def solve_w_eq_2r_semicircle(
         center = Point((x1 + x2) / 2.0, y_star)
 
         if not point_is_ahead_along_heading(start_state.p, start_state.heading, semi_start, tol=tol):
-            if debug:
-                print(f"[W=2R SEMI] reject y*={y_star:.3f}: pre-straight not along start heading")
             continue
 
         if not point_is_ahead_along_heading(semi_end, end_state.heading, end_state.p, tol=tol):
-            if debug:
-                print(f"[W=2R SEMI] reject y*={y_star:.3f}: post-straight not along end heading")
             continue
 
         pre_straight = distance(start_state.p, semi_start)
@@ -604,16 +591,8 @@ def solve_w_eq_2r_semicircle(
         rtx, rty = ry, -rx
         rn = normalize(rtx, rty)
 
-        if ln is not None:
-            dotL = ln[0] * h1x + ln[1] * h1y
-        else:
-            dotL = -1e9
-
-        if rn is not None:
-            dotR = rn[0] * h1x + rn[1] * h1y
-        else:
-            dotR = -1e9
-
+        dotL = ln[0] * h1x + ln[1] * h1y if ln is not None else -1e9
+        dotR = rn[0] * h1x + rn[1] * h1y if rn is not None else -1e9
         turn_direction = 'L' if dotL >= dotR else 'R'
 
         feasible_paths.append(
@@ -634,24 +613,10 @@ def solve_w_eq_2r_semicircle(
             )
         )
 
-        if debug:
-            print(f"[W=2R SEMI] feasible y*={y_star:.3f}")
-            print(f"    semi_start=({semi_start.x:.3f}, {semi_start.y:.3f})")
-            print(f"    semi_end  =({semi_end.x:.3f}, {semi_end.y:.3f})")
-            print(f"    center    =({center.x:.3f}, {center.y:.3f})")
-            print(f"    pre={pre_straight:.3f}, arc={arc_length:.3f}, post={post_straight:.3f}, total={total_length:.3f}")
-            print(f"    turn={turn_direction}")
-
     if not feasible_paths:
-        if debug:
-            print("[W=2R SEMI] no feasible path")
         return SemicircleTurnPath(valid=False)
 
-    best = min(feasible_paths, key=lambda p: p.total_length)
-    if debug:
-        print(f"[W=2R SEMI] best total_length={best.total_length:.3f}, turn={best.turn_direction}")
-
-    return best
+    return min(feasible_paths, key=lambda p: p.total_length)
 
 
 def solve_fixed_head_tail_w_eq_2r_semicircle_turn(
@@ -664,15 +629,8 @@ def solve_fixed_head_tail_w_eq_2r_semicircle_turn(
     tol: float = 1e-6,
     debug: bool = False
 ) -> Optional[SemicircleTurnCandidate]:
-    """
-    W = 2R 的独立半圆逻辑，且：
-    - EOL 固定在线尾
-    - SOL 固定在线头
-    """
     W = abs(line2.x - line1.x)
     if abs(W - 2.0 * R) > tol:
-        if debug:
-            print(f"[FIXED SEMI] skip: W={W:.6f}, 2R={2.0 * R:.6f}")
         return None
 
     eol_data_y = line1.y_end
@@ -705,6 +663,195 @@ def solve_fixed_head_tail_w_eq_2r_semicircle_turn(
 
 
 # =========================
+# W < 2R 固定模板三圆弧
+# =========================
+
+def solve_w_lt_2r_three_arc(
+    start_state: State,
+    end_state: State,
+    R: float,
+    speed: float,
+    tol: float = 1e-6,
+    debug: bool = False
+) -> ThreeArcTurnPath:
+    """
+    W < 2R 固定对称三圆弧模板
+
+    工程规则：
+    - 左线 -> 右线 : LRL
+    - 右线 -> 左线 : RLR
+    - 起转高度 y_turn = max(start.y, end.y)
+    - 小弧 a / b 完全对称
+    - 中间大圆圆心位于两测线中点的垂线方向
+    - 模板角满足：
+        cos(Q) = (W/2 + R) / (2R)
+    """
+    x1, y1 = start_state.p.x, start_state.p.y
+    x2, y2 = end_state.p.x, end_state.p.y
+
+    W = abs(x2 - x1)
+    if W >= 2.0 * R - tol:
+        if debug:
+            print(f"[W<2R THREE-ARC] invalid: W={W:.6f}, 2R={2.0 * R:.6f}")
+        return ThreeArcTurnPath(valid=False)
+
+    h1x, h1y = cos(start_state.heading), sin(start_state.heading)
+    h2x, h2y = cos(end_state.heading), sin(end_state.heading)
+    heading_dot = h1x * h2x + h1y * h2y
+    if heading_dot > -0.99:
+        if debug:
+            print(f"[W<2R THREE-ARC] invalid: headings are not opposite enough, dot={heading_dot:.6f}")
+        return ThreeArcTurnPath(valid=False)
+
+    y_turn = max(y1, y2)
+    turn_start = Point(x1, y_turn)
+    turn_end = Point(x2, y_turn)
+
+    if not point_is_ahead_along_heading(start_state.p, start_state.heading, turn_start, tol=tol):
+        if debug:
+            print("[W<2R THREE-ARC] invalid: pre-straight not along start heading")
+        return ThreeArcTurnPath(valid=False)
+
+    if not point_is_ahead_along_heading(turn_end, end_state.heading, end_state.p, tol=tol):
+        if debug:
+            print("[W<2R THREE-ARC] invalid: post-straight not along end heading")
+        return ThreeArcTurnPath(valid=False)
+
+    pre_straight = distance(start_state.p, turn_start)
+    post_straight = distance(turn_end, end_state.p)
+
+    if x2 > x1:
+        sequence = "LRL"
+    else:
+        sequence = "RLR"
+
+    cosQ = (W / 2.0 + R) / (2.0 * R)
+    cosQ = max(-1.0, min(1.0, cosQ))
+    Q = acos(cosQ)
+
+    h = sqrt(max(0.0, (2.0 * R) ** 2 - (R + W / 2.0) ** 2))
+    xm = 0.5 * (x1 + x2)
+
+    if x2 > x1:
+        c1 = Point(x1 - R, y_turn)
+        c3 = Point(x2 + R, y_turn)
+        c2 = Point(xm, y_turn + h)
+        turn1, turn2, turn3 = 'L', 'R', 'L'
+    else:
+        c1 = Point(x1 + R, y_turn)
+        c3 = Point(x2 - R, y_turn)
+        c2 = Point(xm, y_turn + h)
+        turn1, turn2, turn3 = 'R', 'L', 'R'
+
+    v12 = normalize(c2.x - c1.x, c2.y - c1.y)
+    v32 = normalize(c2.x - c3.x, c2.y - c3.y)
+
+    if v12 is None or v32 is None:
+        if debug:
+            print("[W<2R THREE-ARC] invalid: normalize failed")
+        return ThreeArcTurnPath(valid=False)
+
+    join12 = Point(c1.x + R * v12[0], c1.y + R * v12[1])
+    join23 = Point(c3.x + R * v32[0], c3.y + R * v32[1])
+
+    arc_a_angle = Q
+    arc_b_angle = Q
+    arc_c_angle = 2.0 * pi - 2.0 * Q
+
+    arc_a_length = R * arc_a_angle
+    arc_b_length = R * arc_b_angle
+    arc_c_length = R * arc_c_angle
+
+    total_length = pre_straight + arc_a_length + arc_c_length + arc_b_length + post_straight
+    total_time = total_length / speed
+
+    if debug:
+        print(f"[W<2R THREE-ARC] feasible")
+        print(f"    sequence={sequence}")
+        print(f"    W={W:.3f}, R={R:.3f}")
+        print(f"    y_turn={y_turn:.3f}")
+        print(f"    Q={degrees(Q):.3f} deg")
+        print(f"    c1=({c1.x:.3f}, {c1.y:.3f})")
+        print(f"    c2=({c2.x:.3f}, {c2.y:.3f})")
+        print(f"    c3=({c3.x:.3f}, {c3.y:.3f})")
+        print(f"    join12=({join12.x:.3f}, {join12.y:.3f})")
+        print(f"    join23=({join23.x:.3f}, {join23.y:.3f})")
+        print(f"    pre={pre_straight:.3f}, post={post_straight:.3f}")
+        print(f"    a={degrees(arc_a_angle):.3f} deg")
+        print(f"    c={degrees(arc_c_angle):.3f} deg")
+        print(f"    b={degrees(arc_b_angle):.3f} deg")
+        print(f"    total={total_length:.3f}")
+
+    return ThreeArcTurnPath(
+        valid=True,
+        path_type="THREE_ARC_W_LT_2R",
+        start_point=start_state.p,
+        end_point=end_state.p,
+        turn_start_point=turn_start,
+        turn_end_point=turn_end,
+        center1=c1,
+        center2=c2,
+        center3=c3,
+        join12=join12,
+        join23=join23,
+        arc_a_angle=arc_a_angle,
+        arc_b_angle=arc_b_angle,
+        arc_c_angle=arc_c_angle,
+        arc_a_length=arc_a_length,
+        arc_b_length=arc_b_length,
+        arc_c_length=arc_c_length,
+        pre_straight_length=pre_straight,
+        post_straight_length=post_straight,
+        total_length=total_length,
+        total_time=total_time,
+        turn_sequence=sequence
+    )
+
+
+def solve_fixed_head_tail_w_lt_2r_three_arc_turn(
+    line1: VerticalLine,
+    line2: VerticalLine,
+    L_out: float,
+    L_in: float,
+    R: float,
+    speed: float,
+    tol: float = 1e-6,
+    debug: bool = False
+) -> Optional[ThreeArcTurnCandidate]:
+    W = abs(line2.x - line1.x)
+    if W >= 2.0 * R - tol:
+        return None
+
+    eol_data_y = line1.y_end
+    sol_data_y = line2.y_start
+
+    eol_geom, eol_data_point = build_eol_geom(line1, eol_data_y, L_out)
+    sol_geom, sol_data_point = build_sol_geom_fixed_head(line2, L_in)
+
+    three_arc = solve_w_lt_2r_three_arc(
+        start_state=eol_geom,
+        end_state=sol_geom,
+        R=R,
+        speed=speed,
+        tol=tol,
+        debug=debug
+    )
+    if not three_arc.valid:
+        return None
+
+    return ThreeArcTurnCandidate(
+        eol_data_y=eol_data_y,
+        sol_data_y=sol_data_y,
+        eol_data_point=eol_data_point,
+        sol_data_point=sol_data_point,
+        eol_geom=eol_geom,
+        sol_geom=sol_geom,
+        three_arc=three_arc,
+        total_cost=three_arc.total_time
+    )
+
+
+# =========================
 # 打印结果
 # =========================
 
@@ -727,10 +874,10 @@ def print_result(best: Optional[TurnCandidate]):
     print(f"第二圆弧长度: {d.arc2_length:.3f}")
     print(f"总长度     : {d.total_length:.3f}")
     print(f"总时间     : {d.total_time:.3f}")
-    print(f"圆心1       : ({d.center1.x:.3f}, {d.center1.y:.3f})")
-    print(f"圆心2       : ({d.center2.x:.3f}, {d.center2.y:.3f})")
-    print(f"切点1       : ({d.tangent_point1.x:.3f}, {d.tangent_point1.y:.3f})")
-    print(f"切点2       : ({d.tangent_point2.x:.3f}, {d.tangent_point2.y:.3f})")
+    print(f"圆心1      : ({d.center1.x:.3f}, {d.center1.y:.3f})")
+    print(f"圆心2      : ({d.center2.x:.3f}, {d.center2.y:.3f})")
+    print(f"切点1      : ({d.tangent_point1.x:.3f}, {d.tangent_point1.y:.3f})")
+    print(f"切点2      : ({d.tangent_point2.x:.3f}, {d.tangent_point2.y:.3f})")
     print("==================================")
 
 
@@ -756,6 +903,39 @@ def print_semicircle_result(best: Optional[SemicircleTurnCandidate]):
     print(f"总长度    : {s.total_length:.3f}")
     print(f"总时间    : {s.total_time:.3f}")
     print("====================================")
+
+
+def print_three_arc_result(best: Optional[ThreeArcTurnCandidate]):
+    if best is None:
+        print("未找到可行的 W < 2R 三圆弧换线路径。")
+        return
+
+    t = best.three_arc
+    print("====== W < 2R 三圆弧换线结果 ======")
+    print(f"EOL 数据点: ({best.eol_data_point.x:.3f}, {best.eol_data_point.y:.3f}) [固定在线尾]")
+    print(f"SOL 数据点: ({best.sol_data_point.x:.3f}, {best.sol_data_point.y:.3f}) [固定在线头]")
+    print(f"EOL 几何点: ({best.eol_geom.p.x:.3f}, {best.eol_geom.p.y:.3f})  heading={degrees(best.eol_geom.heading):.2f} deg")
+    print(f"SOL 几何点: ({best.sol_geom.p.x:.3f}, {best.sol_geom.p.y:.3f})  heading={degrees(best.sol_geom.heading):.2f} deg")
+    print(f"路径类型  : {t.path_type}")
+    print(f"转弯序列  : {t.turn_sequence}")
+    print(f"三圆弧起点: ({t.turn_start_point.x:.3f}, {t.turn_start_point.y:.3f})")
+    print(f"三圆弧终点: ({t.turn_end_point.x:.3f}, {t.turn_end_point.y:.3f})")
+    print(f"圆心1      : ({t.center1.x:.3f}, {t.center1.y:.3f})")
+    print(f"圆心2      : ({t.center2.x:.3f}, {t.center2.y:.3f})")
+    print(f"圆心3      : ({t.center3.x:.3f}, {t.center3.y:.3f})")
+    print(f"连接点12   : ({t.join12.x:.3f}, {t.join12.y:.3f})")
+    print(f"连接点23   : ({t.join23.x:.3f}, {t.join23.y:.3f})")
+    print(f"a角        : {degrees(t.arc_a_angle):.3f} deg")
+    print(f"c角        : {degrees(t.arc_c_angle):.3f} deg")
+    print(f"b角        : {degrees(t.arc_b_angle):.3f} deg")
+    print(f"前直线长度 : {t.pre_straight_length:.3f}")
+    print(f"a弧长      : {t.arc_a_length:.3f}")
+    print(f"c弧长      : {t.arc_c_length:.3f}")
+    print(f"b弧长      : {t.arc_b_length:.3f}")
+    print(f"后直线长度 : {t.post_straight_length:.3f}")
+    print(f"总长度     : {t.total_length:.3f}")
+    print(f"总时间     : {t.total_time:.3f}")
+    print("==================================")
 
 
 # =========================
@@ -813,20 +993,16 @@ def plot_turn_solution(
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
-    ax.plot([line1.x, line1.x], [line1.y_start, line1.y_end],
-            color="tab:blue", linewidth=3.0, label="Line 1")
-    ax.plot([line2.x, line2.x], [line2.y_start, line2.y_end],
-            color="tab:green", linewidth=3.0, label="Line 2")
+    ax.plot([line1.x, line1.x], [line1.y_start, line1.y_end], color="tab:blue", linewidth=3.0, label="Line 1")
+    ax.plot([line2.x, line2.x], [line2.y_start, line2.y_end], color="tab:green", linewidth=3.0, label="Line 2")
 
     mid1 = 0.5 * (line1.y_start + line1.y_end)
-    ax.arrow(line1.x, mid1, 0, 250 * line1.direction,
-             head_width=45, head_length=90, fc="tab:blue", ec="tab:blue",
-             length_includes_head=True)
+    ax.arrow(line1.x, mid1, 0, 250 * line1.direction, head_width=45, head_length=90,
+             fc="tab:blue", ec="tab:blue", length_includes_head=True)
 
     mid2 = 0.5 * (line2.y_start + line2.y_end)
-    ax.arrow(line2.x, mid2, 0, 250 * line2.direction,
-             head_width=45, head_length=90, fc="tab:green", ec="tab:green",
-             length_includes_head=True)
+    ax.arrow(line2.x, mid2, 0, 250 * line2.direction, head_width=45, head_length=90,
+             fc="tab:green", ec="tab:green", length_includes_head=True)
 
     eol_data = best.eol_data_point
     sol_data = best.sol_data_point
@@ -835,30 +1011,26 @@ def plot_turn_solution(
     d = best.dubins
 
     ax.scatter([eol_data.x], [eol_data.y], color="blue", s=80, zorder=5)
-    ax.text(eol_data.x + 30, eol_data.y, "EOL data", color="blue", fontsize=11)
-
     ax.scatter([sol_data.x], [sol_data.y], color="green", s=80, zorder=5)
-    ax.text(sol_data.x + 30, sol_data.y, "SOL data", color="green", fontsize=11)
-
     ax.scatter([eol_geom.p.x], [eol_geom.p.y], color="navy", s=90, marker="s", zorder=6)
-    ax.text(eol_geom.p.x + 30, eol_geom.p.y, "EOL geom", color="navy", fontsize=11)
-
     ax.scatter([sol_geom.p.x], [sol_geom.p.y], color="darkgreen", s=90, marker="s", zorder=6)
+
+    ax.text(eol_data.x + 30, eol_data.y, "EOL data", color="blue", fontsize=11)
+    ax.text(sol_data.x + 30, sol_data.y, "SOL data", color="green", fontsize=11)
+    ax.text(eol_geom.p.x + 30, eol_geom.p.y, "EOL geom", color="navy", fontsize=11)
     ax.text(sol_geom.p.x + 30, sol_geom.p.y, "SOL geom", color="darkgreen", fontsize=11)
 
     draw_heading_arrow(ax, eol_geom, length=140.0, color="navy", label="hdg1")
     draw_heading_arrow(ax, sol_geom, length=140.0, color="darkgreen", label="hdg2")
 
     ax.scatter([d.center1.x], [d.center1.y], color="red", s=70, marker="x", zorder=6)
-    ax.text(d.center1.x + 25, d.center1.y, "C1", color="red", fontsize=11)
-
     ax.scatter([d.center2.x], [d.center2.y], color="red", s=70, marker="x", zorder=6)
-    ax.text(d.center2.x + 25, d.center2.y, "C2", color="red", fontsize=11)
-
     ax.scatter([d.tangent_point1.x], [d.tangent_point1.y], color="purple", s=70, zorder=6)
-    ax.text(d.tangent_point1.x + 25, d.tangent_point1.y, "T1", color="purple", fontsize=11)
-
     ax.scatter([d.tangent_point2.x], [d.tangent_point2.y], color="purple", s=70, zorder=6)
+
+    ax.text(d.center1.x + 25, d.center1.y, "C1", color="red", fontsize=11)
+    ax.text(d.center2.x + 25, d.center2.y, "C2", color="red", fontsize=11)
+    ax.text(d.tangent_point1.x + 25, d.tangent_point1.y, "T1", color="purple", fontsize=11)
     ax.text(d.tangent_point2.x + 25, d.tangent_point2.y, "T2", color="purple", fontsize=11)
 
     turn1 = d.path_type[0]
@@ -873,54 +1045,30 @@ def plot_turn_solution(
     ax.plot(arc2_x, arc2_y, color="magenta", linewidth=3.5, label="Arc 2")
 
     if show_circles:
-        circle1 = plt.Circle((d.center1.x, d.center1.y), R, color="red", fill=False, linestyle=":", alpha=0.5, linewidth=1.5)
-        circle2 = plt.Circle((d.center2.x, d.center2.y), R, color="red", fill=False, linestyle=":", alpha=0.5, linewidth=1.5)
-        ax.add_patch(circle1)
-        ax.add_patch(circle2)
+        ax.add_patch(plt.Circle((d.center1.x, d.center1.y), R, color="red", fill=False, linestyle=":", alpha=0.5, linewidth=1.5))
+        ax.add_patch(plt.Circle((d.center2.x, d.center2.y), R, color="red", fill=False, linestyle=":", alpha=0.5, linewidth=1.5))
 
-    ax.plot([eol_data.x, eol_geom.p.x], [eol_data.y, eol_geom.p.y],
-            color="blue", linestyle=":", linewidth=2.5, label="Run out")
-    ax.plot([sol_geom.p.x, sol_data.x], [sol_geom.p.y, sol_data.y],
-            color="green", linestyle=":", linewidth=2.5, label="Run in")
+    ax.plot([eol_data.x, eol_geom.p.x], [eol_data.y, eol_geom.p.y], color="blue", linestyle=":", linewidth=2.5, label="Run out")
+    ax.plot([sol_geom.p.x, sol_data.x], [sol_geom.p.y, sol_data.y], color="green", linestyle=":", linewidth=2.5, label="Run in")
 
-    title = (
-        f"Best Turn Solution  |  Type={d.path_type}  |  "
-        f"Total Length={d.total_length:.2f}  |  Total Time={d.total_time:.2f}"
-    )
-    ax.set_title(title, fontsize=14)
+    ax.set_title(f"Best Turn Solution  |  Type={d.path_type}  |  Total Length={d.total_length:.2f}  |  Total Time={d.total_time:.2f}", fontsize=14)
     ax.set_xlabel("X", fontsize=12)
     ax.set_ylabel("Y", fontsize=12)
     ax.legend(loc="best", fontsize=11)
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.set_aspect("equal", adjustable="box")
 
-    xs = [
-        line1.x, line2.x,
-        eol_data.x, sol_data.x,
-        eol_geom.p.x, sol_geom.p.x,
-        d.center1.x, d.center2.x,
-        d.tangent_point1.x, d.tangent_point2.x
-    ]
-    ys = [
-        line1.y_start, line1.y_end,
-        line2.y_start, line2.y_end,
-        eol_data.y, sol_data.y,
-        eol_geom.p.y, sol_geom.p.y,
-        d.center1.y, d.center2.y,
-        d.tangent_point1.y, d.tangent_point2.y
-    ]
+    xs = [line1.x, line2.x, eol_data.x, sol_data.x, eol_geom.p.x, sol_geom.p.x, d.center1.x, d.center2.x, d.tangent_point1.x, d.tangent_point2.x]
+    ys = [line1.y_start, line1.y_end, line2.y_start, line2.y_end, eol_data.y, sol_data.y, eol_geom.p.y, sol_geom.p.y, d.center1.y, d.center2.y, d.tangent_point1.y, d.tangent_point2.y]
     margin_x = max(120.0, 0.18 * (max(xs) - min(xs) + 1.0))
     margin_y = max(120.0, 0.18 * (max(ys) - min(ys) + 1.0))
-
     ax.set_xlim(min(xs) - margin_x, max(xs) + margin_x)
     ax.set_ylim(min(ys) - margin_y, max(ys) + margin_y)
 
     plt.tight_layout()
-
     if save_path is not None:
         plt.savefig(save_path, dpi=dpi, bbox_inches="tight")
         print(f"图片已保存到: {save_path}")
-
     plt.show()
 
 
@@ -939,20 +1087,15 @@ def plot_semicircle_turn_solution(
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
-    ax.plot([line1.x, line1.x], [line1.y_start, line1.y_end],
-            color="tab:blue", linewidth=3.0, label="Line 1")
-    ax.plot([line2.x, line2.x], [line2.y_start, line2.y_end],
-            color="tab:green", linewidth=3.0, label="Line 2")
+    ax.plot([line1.x, line1.x], [line1.y_start, line1.y_end], color="tab:blue", linewidth=3.0, label="Line 1")
+    ax.plot([line2.x, line2.x], [line2.y_start, line2.y_end], color="tab:green", linewidth=3.0, label="Line 2")
 
     mid1 = 0.5 * (line1.y_start + line1.y_end)
-    ax.arrow(line1.x, mid1, 0, 250 * line1.direction,
-             head_width=45, head_length=90, fc="tab:blue", ec="tab:blue",
-             length_includes_head=True)
-
+    ax.arrow(line1.x, mid1, 0, 250 * line1.direction, head_width=45, head_length=90,
+             fc="tab:blue", ec="tab:blue", length_includes_head=True)
     mid2 = 0.5 * (line2.y_start + line2.y_end)
-    ax.arrow(line2.x, mid2, 0, 250 * line2.direction,
-             head_width=45, head_length=90, fc="tab:green", ec="tab:green",
-             length_includes_head=True)
+    ax.arrow(line2.x, mid2, 0, 250 * line2.direction, head_width=45, head_length=90,
+             fc="tab:green", ec="tab:green", length_includes_head=True)
 
     eol_data = best.eol_data_point
     sol_data = best.sol_data_point
@@ -961,55 +1104,158 @@ def plot_semicircle_turn_solution(
     s = best.semi
 
     ax.scatter([eol_data.x], [eol_data.y], color="blue", s=80, zorder=5)
-    ax.text(eol_data.x + 30, eol_data.y, "EOL data", color="blue", fontsize=11)
-
     ax.scatter([sol_data.x], [sol_data.y], color="green", s=80, zorder=5)
-    ax.text(sol_data.x + 30, sol_data.y, "SOL data", color="green", fontsize=11)
-
     ax.scatter([eol_geom.p.x], [eol_geom.p.y], color="navy", s=90, marker="s", zorder=6)
-    ax.text(eol_geom.p.x + 30, eol_geom.p.y, "EOL geom", color="navy", fontsize=11)
-
     ax.scatter([sol_geom.p.x], [sol_geom.p.y], color="darkgreen", s=90, marker="s", zorder=6)
+
+    ax.text(eol_data.x + 30, eol_data.y, "EOL data", color="blue", fontsize=11)
+    ax.text(sol_data.x + 30, sol_data.y, "SOL data", color="green", fontsize=11)
+    ax.text(eol_geom.p.x + 30, eol_geom.p.y, "EOL geom", color="navy", fontsize=11)
     ax.text(sol_geom.p.x + 30, sol_geom.p.y, "SOL geom", color="darkgreen", fontsize=11)
 
     draw_heading_arrow(ax, eol_geom, length=140.0, color="navy", label="hdg1")
     draw_heading_arrow(ax, sol_geom, length=140.0, color="darkgreen", label="hdg2")
 
     ax.scatter([s.semicircle_start.x], [s.semicircle_start.y], color="purple", s=80, zorder=7)
-    ax.text(s.semicircle_start.x + 25, s.semicircle_start.y, "Semi start", color="purple", fontsize=11)
-
     ax.scatter([s.semicircle_end.x], [s.semicircle_end.y], color="purple", s=80, zorder=7)
-    ax.text(s.semicircle_end.x + 25, s.semicircle_end.y, "Semi end", color="purple", fontsize=11)
-
     ax.scatter([s.center.x], [s.center.y], color="red", s=80, marker="x", zorder=7)
+
+    ax.text(s.semicircle_start.x + 25, s.semicircle_start.y, "Semi start", color="purple", fontsize=11)
+    ax.text(s.semicircle_end.x + 25, s.semicircle_end.y, "Semi end", color="purple", fontsize=11)
     ax.text(s.center.x + 25, s.center.y, "C", color="red", fontsize=11)
 
-    ax.plot([eol_data.x, eol_geom.p.x], [eol_data.y, eol_geom.p.y],
-            color="blue", linestyle=":", linewidth=2.5, label="Run out")
-    ax.plot([sol_geom.p.x, sol_data.x], [sol_geom.p.y, sol_data.y],
-            color="green", linestyle=":", linewidth=2.5, label="Run in")
+    ax.plot([eol_data.x, eol_geom.p.x], [eol_data.y, eol_geom.p.y], color="blue", linestyle=":", linewidth=2.5, label="Run out")
+    ax.plot([sol_geom.p.x, sol_data.x], [sol_geom.p.y, sol_data.y], color="green", linestyle=":", linewidth=2.5, label="Run in")
 
     if s.pre_straight_length > EPS:
         px, py = sample_line(s.start_point, s.semicircle_start, n=50)
         ax.plot(px, py, color="black", linewidth=3.0, linestyle="--", label="Pre-straight")
 
-    arc_x, arc_y = sample_arc(
-        s.center, R, s.semicircle_start, s.semicircle_end, s.turn_direction, n=240
-    )
+    arc_x, arc_y = sample_arc(s.center, R, s.semicircle_start, s.semicircle_end, s.turn_direction, n=240)
     ax.plot(arc_x, arc_y, color="orange", linewidth=3.5, label="Semicircle")
 
     if s.post_straight_length > EPS:
         qx, qy = sample_line(s.semicircle_end, s.end_point, n=50)
         ax.plot(qx, qy, color="gray", linewidth=3.0, linestyle="--", label="Post-straight")
 
-    circle = plt.Circle((s.center.x, s.center.y), R, color="red", fill=False, linestyle=":", alpha=0.5, linewidth=1.5)
-    ax.add_patch(circle)
+    ax.add_patch(plt.Circle((s.center.x, s.center.y), R, color="red", fill=False, linestyle=":", alpha=0.5, linewidth=1.5))
 
-    title = (
-        f"W=2R Semicircle Turn  |  "
-        f"Total Length={s.total_length:.2f}  |  Total Time={s.total_time:.2f}"
-    )
-    ax.set_title(title, fontsize=14)
+    ax.set_title(f"W=2R Semicircle Turn  |  Total Length={s.total_length:.2f}  |  Total Time={s.total_time:.2f}", fontsize=14)
+    ax.set_xlabel("X", fontsize=12)
+    ax.set_ylabel("Y", fontsize=12)
+    ax.legend(loc="best", fontsize=11)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    ax.set_aspect("equal", adjustable="box")
+
+    xs = [line1.x, line2.x, eol_data.x, sol_data.x, eol_geom.p.x, sol_geom.p.x, s.semicircle_start.x, s.semicircle_end.x, s.center.x]
+    ys = [line1.y_start, line1.y_end, line2.y_start, line2.y_end, eol_data.y, sol_data.y, eol_geom.p.y, sol_geom.p.y, s.semicircle_start.y, s.semicircle_end.y, s.center.y]
+
+    margin_x = max(120.0, 0.18 * (max(xs) - min(xs) + 1.0))
+    margin_y = max(120.0, 0.18 * (max(ys) - min(ys) + 1.0))
+    ax.set_xlim(min(xs) - margin_x, max(xs) + margin_x)
+    ax.set_ylim(min(ys) - margin_y, max(ys) + margin_y)
+
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, dpi=dpi, bbox_inches="tight")
+        print(f"图片已保存到: {save_path}")
+    plt.show()
+
+
+def plot_three_arc_turn_solution(
+    line1: VerticalLine,
+    line2: VerticalLine,
+    best: Optional[ThreeArcTurnCandidate],
+    R: float,
+    figsize=(10, 12),
+    dpi=200,
+    save_path: Optional[str] = None
+):
+    if best is None:
+        print("没有可视化结果：best is None")
+        return
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    ax.plot([line1.x, line1.x], [line1.y_start, line1.y_end], color="tab:blue", linewidth=3.0, label="Line 1")
+    ax.plot([line2.x, line2.x], [line2.y_start, line2.y_end], color="tab:green", linewidth=3.0, label="Line 2")
+
+    mid1 = 0.5 * (line1.y_start + line1.y_end)
+    ax.arrow(line1.x, mid1, 0, 250 * line1.direction, head_width=45, head_length=90,
+             fc="tab:blue", ec="tab:blue", length_includes_head=True)
+
+    mid2 = 0.5 * (line2.y_start + line2.y_end)
+    ax.arrow(line2.x, mid2, 0, 250 * line2.direction, head_width=45, head_length=90,
+             fc="tab:green", ec="tab:green", length_includes_head=True)
+
+    eol_data = best.eol_data_point
+    sol_data = best.sol_data_point
+    eol_geom = best.eol_geom
+    sol_geom = best.sol_geom
+    t = best.three_arc
+
+    ax.scatter([eol_data.x], [eol_data.y], color="blue", s=80, zorder=5)
+    ax.scatter([sol_data.x], [sol_data.y], color="green", s=80, zorder=5)
+    ax.scatter([eol_geom.p.x], [eol_geom.p.y], color="navy", s=90, marker="s", zorder=6)
+    ax.scatter([sol_geom.p.x], [sol_geom.p.y], color="darkgreen", s=90, marker="s", zorder=6)
+
+    ax.text(eol_data.x + 30, eol_data.y, "EOL data", color="blue", fontsize=11)
+    ax.text(sol_data.x + 30, sol_data.y, "SOL data", color="green", fontsize=11)
+    ax.text(eol_geom.p.x + 30, eol_geom.p.y, "EOL geom", color="navy", fontsize=11)
+    ax.text(sol_geom.p.x + 30, sol_geom.p.y, "SOL geom", color="darkgreen", fontsize=11)
+
+    draw_heading_arrow(ax, eol_geom, length=140.0, color="navy", label="hdg1")
+    draw_heading_arrow(ax, sol_geom, length=140.0, color="darkgreen", label="hdg2")
+
+    ax.scatter([t.turn_start_point.x], [t.turn_start_point.y], color="purple", s=70, zorder=7)
+    ax.scatter([t.turn_end_point.x], [t.turn_end_point.y], color="purple", s=70, zorder=7)
+    ax.text(t.turn_start_point.x + 25, t.turn_start_point.y, "Turn start", color="purple", fontsize=11)
+    ax.text(t.turn_end_point.x + 25, t.turn_end_point.y, "Turn end", color="purple", fontsize=11)
+
+    ax.scatter([t.center1.x], [t.center1.y], color="red", s=70, marker="x", zorder=7)
+    ax.scatter([t.center2.x], [t.center2.y], color="red", s=70, marker="x", zorder=7)
+    ax.scatter([t.center3.x], [t.center3.y], color="red", s=70, marker="x", zorder=7)
+
+    ax.text(t.center1.x + 25, t.center1.y, "C1", color="red", fontsize=11)
+    ax.text(t.center2.x + 25, t.center2.y, "C2", color="red", fontsize=11)
+    ax.text(t.center3.x + 25, t.center3.y, "C3", color="red", fontsize=11)
+
+    ax.scatter([t.join12.x], [t.join12.y], color="black", s=60, zorder=7)
+    ax.scatter([t.join23.x], [t.join23.y], color="black", s=60, zorder=7)
+    ax.text(t.join12.x + 20, t.join12.y, "J12", color="black", fontsize=10)
+    ax.text(t.join23.x + 20, t.join23.y, "J23", color="black", fontsize=10)
+
+    ax.plot([eol_data.x, eol_geom.p.x], [eol_data.y, eol_geom.p.y], color="blue", linestyle=":", linewidth=2.5, label="Run out")
+    ax.plot([sol_geom.p.x, sol_data.x], [sol_geom.p.y, sol_data.y], color="green", linestyle=":", linewidth=2.5, label="Run in")
+
+    if t.pre_straight_length > EPS:
+        px, py = sample_line(t.start_point, t.turn_start_point, n=50)
+        ax.plot(px, py, color="black", linewidth=3.0, linestyle="--", label="Pre-straight")
+
+    if t.turn_sequence == "LRL":
+        turn1, turn2, turn3 = 'L', 'R', 'L'
+    elif t.turn_sequence == "RLR":
+        turn1, turn2, turn3 = 'R', 'L', 'R'
+    else:
+        raise ValueError(f"Unknown turn sequence: {t.turn_sequence}")
+
+    arc1_x, arc1_y = sample_arc(t.center1, R, t.turn_start_point, t.join12, turn1, n=180)
+    arc2_x, arc2_y = sample_arc(t.center2, R, t.join12, t.join23, turn2, n=260)
+    arc3_x, arc3_y = sample_arc(t.center3, R, t.join23, t.turn_end_point, turn3, n=180)
+
+    ax.plot(arc1_x, arc1_y, color="orange", linewidth=3.5, label="Arc a")
+    ax.plot(arc2_x, arc2_y, color="magenta", linewidth=3.5, label="Arc c")
+    ax.plot(arc3_x, arc3_y, color="brown", linewidth=3.5, label="Arc b")
+
+    if t.post_straight_length > EPS:
+        qx, qy = sample_line(t.turn_end_point, t.end_point, n=50)
+        ax.plot(qx, qy, color="gray", linewidth=3.0, linestyle="--", label="Post-straight")
+
+    ax.add_patch(plt.Circle((t.center1.x, t.center1.y), R, color="red", fill=False, linestyle=":", alpha=0.45, linewidth=1.5))
+    ax.add_patch(plt.Circle((t.center2.x, t.center2.y), R, color="red", fill=False, linestyle=":", alpha=0.45, linewidth=1.5))
+    ax.add_patch(plt.Circle((t.center3.x, t.center3.y), R, color="red", fill=False, linestyle=":", alpha=0.45, linewidth=1.5))
+
+    ax.set_title(f"W<2R Three-Arc Turn  |  Type={t.turn_sequence}  |  Total Length={t.total_length:.2f}  |  Total Time={t.total_time:.2f}", fontsize=14)
     ax.set_xlabel("X", fontsize=12)
     ax.set_ylabel("Y", fontsize=12)
     ax.legend(loc="best", fontsize=11)
@@ -1020,14 +1266,18 @@ def plot_semicircle_turn_solution(
         line1.x, line2.x,
         eol_data.x, sol_data.x,
         eol_geom.p.x, sol_geom.p.x,
-        s.semicircle_start.x, s.semicircle_end.x, s.center.x
+        t.turn_start_point.x, t.turn_end_point.x,
+        t.center1.x, t.center2.x, t.center3.x,
+        t.join12.x, t.join23.x
     ]
     ys = [
         line1.y_start, line1.y_end,
         line2.y_start, line2.y_end,
         eol_data.y, sol_data.y,
         eol_geom.p.y, sol_geom.p.y,
-        s.semicircle_start.y, s.semicircle_end.y, s.center.y
+        t.turn_start_point.y, t.turn_end_point.y,
+        t.center1.y, t.center2.y, t.center3.y,
+        t.join12.y, t.join23.y
     ]
 
     margin_x = max(120.0, 0.18 * (max(xs) - min(xs) + 1.0))
@@ -1036,11 +1286,9 @@ def plot_semicircle_turn_solution(
     ax.set_ylim(min(ys) - margin_y, max(ys) + margin_y)
 
     plt.tight_layout()
-
     if save_path is not None:
         plt.savefig(save_path, dpi=dpi, bbox_inches="tight")
         print(f"图片已保存到: {save_path}")
-
     plt.show()
 
 
@@ -1049,7 +1297,7 @@ def plot_semicircle_turn_solution(
 # =========================
 
 if __name__ == "__main__":
-    # 第一条线：从下往上采
+    # 你当前测试例
     line1 = VerticalLine(
         x=0.0,
         y_start=0.0,
@@ -1057,10 +1305,9 @@ if __name__ == "__main__":
         direction=+1
     )
 
-    # 第二条线：从上往下采
     line2 = VerticalLine(
-        x=1200.0,
-        y_start=3000.0,
+        x=350.0,
+        y_start=4500.0,
         y_end=500.0,
         direction=-1
     )
@@ -1071,32 +1318,9 @@ if __name__ == "__main__":
     speed = 5.0
 
     W = abs(line2.x - line1.x)
-
     print(f"当前测线间距 W = {W:.3f}, 2R = {2.0 * R:.3f}")
 
-    if abs(W - 2.0 * R) < 1e-6:
-        best_semi = solve_fixed_head_tail_w_eq_2r_semicircle_turn(
-            line1=line1,
-            line2=line2,
-            L_out=L_out,
-            L_in=L_in,
-            R=R,
-            speed=speed,
-            debug=True
-        )
-
-        print_semicircle_result(best_semi)
-
-        plot_semicircle_turn_solution(
-            line1,
-            line2,
-            best_semi,
-            R,
-            figsize=(12, 14),
-            dpi=300,
-            save_path="turn_solution_w_eq_2r.png"
-        )
-    else:
+    if W > 2.0 * R + 1e-6:
         best = solve_fixed_head_tail_turn_between_vertical_lines(
             line1=line1,
             line2=line2,
@@ -1106,16 +1330,47 @@ if __name__ == "__main__":
             speed=speed,
             debug=True
         )
-
         print_result(best)
-
         plot_turn_solution(
-            line1,
-            line2,
-            best,
-            R,
+            line1, line2, best, R,
             show_circles=True,
             figsize=(12, 14),
             dpi=300,
             save_path="turn_solution_csc.png"
+        )
+
+    elif abs(W - 2.0 * R) <= 1e-6:
+        best_semi = solve_fixed_head_tail_w_eq_2r_semicircle_turn(
+            line1=line1,
+            line2=line2,
+            L_out=L_out,
+            L_in=L_in,
+            R=R,
+            speed=speed,
+            debug=True
+        )
+        print_semicircle_result(best_semi)
+        plot_semicircle_turn_solution(
+            line1, line2, best_semi, R,
+            figsize=(12, 14),
+            dpi=300,
+            save_path="turn_solution_w_eq_2r.png"
+        )
+
+    else:
+        best_three = solve_fixed_head_tail_w_lt_2r_three_arc_turn(
+            line1=line1,
+            line2=line2,
+            L_out=L_out,
+            L_in=L_in,
+            R=R,
+            speed=speed,
+            debug=True
+        )
+        print_three_arc_result(best_three)
+        plot_three_arc_turn_solution(
+            line1, line2, best_three, R,
+            figsize=(12, 14),
+            dpi=300,
+            save_path="turn_solution_w_lt_2r_three_arc_v2.png"
         )
