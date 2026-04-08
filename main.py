@@ -463,8 +463,10 @@ def point_on_vertical_line(line: VerticalLine, y: float) -> Point:
 
 def build_eol_geom(line1: VerticalLine, eol_data_y: float, L_out: float) -> Tuple[State, Point]:
     """
-    EOL数据点可搜索
-    EOL几何点 = EOL数据点沿采集方向前进 L_out
+    EOL数据点 = 第一条测线上的离线数据点
+    EOL几何点 = EOL数据点沿测线方向继续走 L_out
+             = Run out 终点
+             = Dubins 转弯起点
     """
     data_pt = point_on_vertical_line(line1, eol_data_y)
     geom_pt = Point(line1.x, eol_data_y + line1.direction * L_out)
@@ -474,9 +476,9 @@ def build_eol_geom(line1: VerticalLine, eol_data_y: float, L_out: float) -> Tupl
 def build_sol_geom_fixed_head(line2: VerticalLine, L_in: float) -> Tuple[State, Point]:
     """
     SOL固定在线头（采集起点）
-    SOL数据点 = line2.y_start
     SOL几何点 = 在正式采集前，沿反方向回退 L_in
-              = data_pt - direction * L_in
+             = Run in 起点
+             = Dubins 转弯终点
     """
     sol_data_y = line2.y_start
     data_pt = point_on_vertical_line(line2, sol_data_y)
@@ -485,93 +487,47 @@ def build_sol_geom_fixed_head(line2: VerticalLine, L_in: float) -> Tuple[State, 
 
 
 # =========================
-# 候选搜索范围
+# 固定线尾/线头求解器
 # =========================
 
-def generate_candidate_eol_y(line1: VerticalLine, dy: float, search_back_length: float) -> List[float]:
-    """
-    在第一条线尾附近搜索 EOL
-    由于 y_end 定义为采集终点，所以直接围绕 y_end 搜索即可。
-    """
-    vals = []
-
-    if line1.direction > 0:
-        y0 = max(line1.y_start, line1.y_end - search_back_length)
-        y1 = line1.y_end
-        y = y0
-        while y <= y1 + EPS:
-            vals.append(y)
-            y += dy
-    else:
-        y0 = min(line1.y_start, line1.y_end + search_back_length)
-        y1 = line1.y_end
-        y = y0
-        while y >= y1 - EPS:
-            vals.append(y)
-            y -= dy
-
-    return vals
-
-
-# =========================
-# 主优化器：W > 2R 时走 CSC
-# =========================
-
-def optimize_turn_between_vertical_lines(
+def solve_fixed_head_tail_turn_between_vertical_lines(
     line1: VerticalLine,
     line2: VerticalLine,
     L_out: float,
     L_in: float,
     R: float,
     speed: float,
-    dy_eol: float = 50.0,
-    search_back_length: float = 1000.0,
     debug: bool = False
 ) -> Optional[TurnCandidate]:
-    best: Optional[TurnCandidate] = None
+    """
+    固定：
+    - 第一条线必须完整跑到线尾 EOL_data = line1.y_end
+    - 第二条线从线头开始上线 SOL_data = line2.y_start
 
-    eol_candidates = generate_candidate_eol_y(line1, dy_eol, search_back_length)
-    sol_geom, sol_data_point = build_sol_geom_fixed_head(line2, L_in)
+    即：
+    - EOL 不搜索
+    - SOL 不搜索
+    """
+    eol_data_y = line1.y_end
     sol_data_y = line2.y_start
 
-    if debug:
-        print(f"[SEARCH CSC] EOL candidates={len(eol_candidates)}, SOL fixed at line head y={sol_data_y:.2f}")
+    eol_geom, eol_data_point = build_eol_geom(line1, eol_data_y, L_out)
+    sol_geom, sol_data_point = build_sol_geom_fixed_head(line2, L_in)
 
-    for idx, eol_y in enumerate(eol_candidates):
-        eol_geom, eol_data_point = build_eol_geom(line1, eol_y, L_out)
+    dubins = shortest_dubins_csc(eol_geom, sol_geom, R, speed, debug=debug)
+    if not dubins.valid:
+        return None
 
-        local_debug = False
-        # local_debug = debug and (idx == len(eol_candidates) - 1)
-
-        dubins = shortest_dubins_csc(eol_geom, sol_geom, R, speed, debug=local_debug)
-        if not dubins.valid:
-            continue
-
-        total_cost = dubins.total_time
-
-        cand = TurnCandidate(
-            eol_data_y=eol_y,
-            sol_data_y=sol_data_y,
-            eol_data_point=eol_data_point,
-            sol_data_point=sol_data_point,
-            eol_geom=eol_geom,
-            sol_geom=sol_geom,
-            dubins=dubins,
-            total_cost=total_cost
-        )
-
-        if best is None or cand.total_cost < best.total_cost:
-            best = cand
-            if debug:
-                print(
-                    f"[UPDATE BEST CSC] eol_y={eol_y:.2f}, "
-                    f"sol_y={sol_data_y:.2f}, "
-                    f"type={dubins.path_type}, "
-                    f"total_length={dubins.total_length:.3f}, "
-                    f"total_time={dubins.total_time:.3f}"
-                )
-
-    return best
+    return TurnCandidate(
+        eol_data_y=eol_data_y,
+        sol_data_y=sol_data_y,
+        eol_data_point=eol_data_point,
+        sol_data_point=sol_data_point,
+        eol_geom=eol_geom,
+        sol_geom=sol_geom,
+        dubins=dubins,
+        total_cost=dubins.total_time
+    )
 
 
 # =========================
@@ -593,11 +549,9 @@ def solve_w_eq_2r_semicircle(
         直线 + 半圆 + 直线
     其中前后直线某一段可能为 0。
 
-    几何约束：
-    1) 两测线横向间距 W = 2R
-    2) 起终测线应为反向航向（典型平行往返测线）
-    3) 前置直线必须沿 start heading 前进
-    4) 后置直线必须沿目标测线方向接入 SOL_geom
+    这里的 start_state / end_state 分别就是：
+    - EOL_geom = Run out 终点
+    - SOL_geom = Run in 起点
     """
 
     x1, y1 = start_state.p.x, start_state.p.y
@@ -609,7 +563,6 @@ def solve_w_eq_2r_semicircle(
             print(f"[W=2R SEMI] invalid: W={W:.6f}, 2R={2.0 * R:.6f}")
         return SemicircleTurnPath(valid=False)
 
-    # 典型反向平行测线换线
     h1x, h1y = cos(start_state.heading), sin(start_state.heading)
     h2x, h2y = cos(end_state.heading), sin(end_state.heading)
     heading_dot = h1x * h2x + h1y * h2y
@@ -618,11 +571,7 @@ def solve_w_eq_2r_semicircle(
             print(f"[W=2R SEMI] invalid: headings are not opposite enough, dot={heading_dot:.6f}")
         return SemicircleTurnPath(valid=False)
 
-    # 枚举两个自然候选高度：
-    # y*=y1: 先半圆，再在目标线上走到 end
-    # y*=y2: 先在起始线上走到 y2，再做半圆
     candidate_y_stars = [y1, y2]
-
     feasible_paths: List[SemicircleTurnPath] = []
 
     for y_star in candidate_y_stars:
@@ -630,13 +579,11 @@ def solve_w_eq_2r_semicircle(
         semi_end = Point(x2, y_star)
         center = Point((x1 + x2) / 2.0, y_star)
 
-        # 前直线必须沿 start heading 前进
         if not point_is_ahead_along_heading(start_state.p, start_state.heading, semi_start, tol=tol):
             if debug:
                 print(f"[W=2R SEMI] reject y*={y_star:.3f}: pre-straight not along start heading")
             continue
 
-        # 后直线必须沿 end heading 前进
         if not point_is_ahead_along_heading(semi_end, end_state.heading, end_state.p, tol=tol):
             if debug:
                 print(f"[W=2R SEMI] reject y*={y_star:.3f}: post-straight not along end heading")
@@ -648,7 +595,6 @@ def solve_w_eq_2r_semicircle(
         total_length = pre_straight + arc_length + post_straight
         total_time = total_length / speed
 
-        # 判断半圆转向方向
         rx = semi_start.x - center.x
         ry = semi_start.y - center.y
 
@@ -708,75 +654,54 @@ def solve_w_eq_2r_semicircle(
     return best
 
 
-def optimize_w_eq_2r_semicircle_turn(
+def solve_fixed_head_tail_w_eq_2r_semicircle_turn(
     line1: VerticalLine,
     line2: VerticalLine,
     L_out: float,
     L_in: float,
     R: float,
     speed: float,
-    dy_eol: float = 50.0,
-    search_back_length: float = 1000.0,
     tol: float = 1e-6,
     debug: bool = False
 ) -> Optional[SemicircleTurnCandidate]:
     """
-    独立处理 W = 2R 的换线优化。
-    与原 CSC 逻辑完全隔离。
+    W = 2R 的独立半圆逻辑，且：
+    - EOL 固定在线尾
+    - SOL 固定在线头
     """
     W = abs(line2.x - line1.x)
     if abs(W - 2.0 * R) > tol:
         if debug:
-            print(f"[OPT SEMI] skip: W={W:.6f} is not equal to 2R={2.0 * R:.6f}")
+            print(f"[FIXED SEMI] skip: W={W:.6f}, 2R={2.0 * R:.6f}")
         return None
 
-    best: Optional[SemicircleTurnCandidate] = None
-
-    eol_candidates = generate_candidate_eol_y(line1, dy_eol, search_back_length)
-    sol_geom, sol_data_point = build_sol_geom_fixed_head(line2, L_in)
+    eol_data_y = line1.y_end
     sol_data_y = line2.y_start
 
-    if debug:
-        print(f"[OPT SEMI] EOL candidates={len(eol_candidates)}, SOL fixed at line head y={sol_data_y:.2f}")
+    eol_geom, eol_data_point = build_eol_geom(line1, eol_data_y, L_out)
+    sol_geom, sol_data_point = build_sol_geom_fixed_head(line2, L_in)
 
-    for eol_y in eol_candidates:
-        eol_geom, eol_data_point = build_eol_geom(line1, eol_y, L_out)
+    semi = solve_w_eq_2r_semicircle(
+        start_state=eol_geom,
+        end_state=sol_geom,
+        R=R,
+        speed=speed,
+        tol=tol,
+        debug=debug
+    )
+    if not semi.valid:
+        return None
 
-        semi = solve_w_eq_2r_semicircle(
-            start_state=eol_geom,
-            end_state=sol_geom,
-            R=R,
-            speed=speed,
-            tol=tol,
-            debug=False
-        )
-
-        if not semi.valid:
-            continue
-
-        total_cost = semi.total_time
-
-        cand = SemicircleTurnCandidate(
-            eol_data_y=eol_y,
-            sol_data_y=sol_data_y,
-            eol_data_point=eol_data_point,
-            sol_data_point=sol_data_point,
-            eol_geom=eol_geom,
-            sol_geom=sol_geom,
-            semi=semi,
-            total_cost=total_cost
-        )
-
-        if best is None or cand.total_cost < best.total_cost:
-            best = cand
-            if debug:
-                print(
-                    f"[OPT SEMI UPDATE] "
-                    f"eol_y={eol_y:.2f}, total_length={semi.total_length:.3f}, total_time={semi.total_time:.3f}, "
-                    f"pre={semi.pre_straight_length:.3f}, arc={semi.arc_length:.3f}, post={semi.post_straight_length:.3f}"
-                )
-
-    return best
+    return SemicircleTurnCandidate(
+        eol_data_y=eol_data_y,
+        sol_data_y=sol_data_y,
+        eol_data_point=eol_data_point,
+        sol_data_point=sol_data_point,
+        eol_geom=eol_geom,
+        sol_geom=sol_geom,
+        semi=semi,
+        total_cost=semi.total_time
+    )
 
 
 # =========================
@@ -790,7 +715,7 @@ def print_result(best: Optional[TurnCandidate]):
 
     d = best.dubins
     print("========== 最优换线结果 ==========")
-    print(f"EOL 数据点: ({best.eol_data_point.x:.3f}, {best.eol_data_point.y:.3f})")
+    print(f"EOL 数据点: ({best.eol_data_point.x:.3f}, {best.eol_data_point.y:.3f}) [固定在线尾]")
     print(f"SOL 数据点: ({best.sol_data_point.x:.3f}, {best.sol_data_point.y:.3f}) [固定在线头]")
     print(f"EOL 几何点: ({best.eol_geom.p.x:.3f}, {best.eol_geom.p.y:.3f})  heading={degrees(best.eol_geom.heading):.2f} deg")
     print(f"SOL 几何点: ({best.sol_geom.p.x:.3f}, {best.sol_geom.p.y:.3f})  heading={degrees(best.sol_geom.heading):.2f} deg")
@@ -816,7 +741,7 @@ def print_semicircle_result(best: Optional[SemicircleTurnCandidate]):
 
     s = best.semi
     print("====== W = 2R 半圆换线最优结果 ======")
-    print(f"EOL 数据点: ({best.eol_data_point.x:.3f}, {best.eol_data_point.y:.3f})")
+    print(f"EOL 数据点: ({best.eol_data_point.x:.3f}, {best.eol_data_point.y:.3f}) [固定在线尾]")
     print(f"SOL 数据点: ({best.sol_data_point.x:.3f}, {best.sol_data_point.y:.3f}) [固定在线头]")
     print(f"EOL 几何点: ({best.eol_geom.p.x:.3f}, {best.eol_geom.p.y:.3f})  heading={degrees(best.eol_geom.heading):.2f} deg")
     print(f"SOL 几何点: ({best.sol_geom.p.x:.3f}, {best.sol_geom.p.y:.3f})  heading={degrees(best.sol_geom.heading):.2f} deg")
@@ -888,13 +813,11 @@ def plot_turn_solution(
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
-    # 测线
     ax.plot([line1.x, line1.x], [line1.y_start, line1.y_end],
             color="tab:blue", linewidth=3.0, label="Line 1")
     ax.plot([line2.x, line2.x], [line2.y_start, line2.y_end],
             color="tab:green", linewidth=3.0, label="Line 2")
 
-    # 测线方向箭头
     mid1 = 0.5 * (line1.y_start + line1.y_end)
     ax.arrow(line1.x, mid1, 0, 250 * line1.direction,
              head_width=45, head_length=90, fc="tab:blue", ec="tab:blue",
@@ -1134,9 +1057,7 @@ if __name__ == "__main__":
         direction=+1
     )
 
-    # 你可以修改这里测试不同场景
-    # 若想测试 W = 2R，设 x = 500.0（因为 R=250）
-    # 若想测试 W > 2R，设 x = 1200.0
+    # 第二条线：从上往下采
     line2 = VerticalLine(
         x=1200.0,
         y_start=3000.0,
@@ -1154,15 +1075,13 @@ if __name__ == "__main__":
     print(f"当前测线间距 W = {W:.3f}, 2R = {2.0 * R:.3f}")
 
     if abs(W - 2.0 * R) < 1e-6:
-        best_semi = optimize_w_eq_2r_semicircle_turn(
+        best_semi = solve_fixed_head_tail_w_eq_2r_semicircle_turn(
             line1=line1,
             line2=line2,
             L_out=L_out,
             L_in=L_in,
             R=R,
             speed=speed,
-            dy_eol=25.0,
-            search_back_length=800.0,
             debug=True
         )
 
@@ -1178,15 +1097,13 @@ if __name__ == "__main__":
             save_path="turn_solution_w_eq_2r.png"
         )
     else:
-        best = optimize_turn_between_vertical_lines(
+        best = solve_fixed_head_tail_turn_between_vertical_lines(
             line1=line1,
             line2=line2,
             L_out=L_out,
             L_in=L_in,
             R=R,
             speed=speed,
-            dy_eol=25.0,
-            search_back_length=800.0,
             debug=True
         )
 
