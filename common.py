@@ -29,11 +29,16 @@ class VerticalLine:
     - y_end  : 采集终点
     - direction = +1 表示沿 +Y 方向采集
     - direction = -1 表示沿 -Y 方向采集
+    - direction 可自动由 y_end - y_start 推断，无需手动指定
     """
     x: float
     y_start: float
     y_end: float
-    direction: int  # +1 or -1
+    direction: int = 0  # 0 表示自动推断，也可手动指定 +1 或 -1
+
+    def __post_init__(self):
+        if self.direction == 0:
+            self.direction = 1 if self.y_end >= self.y_start else -1
 
     @property
     def length(self) -> float:

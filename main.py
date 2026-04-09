@@ -25,65 +25,56 @@ from three_arc import (
 
 if __name__ == "__main__":
     # 你当前测试例
-	# 左上->右下
+    # 左上->右下
     line1 = VerticalLine(
         x=0.0,
         y_start=0.0,
         y_end=4000.0,
-        direction=+1
     )
 
     line2 = VerticalLine(
-        x=300.0,
+        x=500.0,
         y_start=4500.0,
         y_end=900.0,
-        direction=-1
     )
-	
-	# # 左下->右上
+
+    # # 左下->右上
     # line1 = VerticalLine(
     #     x=0.0,
     #     y_start=4000.0,
     #     y_end=0.0,
-    #     direction=-1
     # )
-
+    #
     # line2 = VerticalLine(
     #     x=300.0,
     #     y_start=900.0,
     #     y_end=4500.0,
-    #     direction=+1
     # )
-	
-	
-	# # 右上->左下
+
+    # # 右上->左下
     # line2 = VerticalLine(
     #     x=0.0,
     #     y_start=4000.0,
     #     y_end=0.0,
-    #     direction=-1
     # )
-
+    #
     # line1 = VerticalLine(
     #     x=300.0,
     #     y_start=900.0,
     #     y_end=4500.0,
-    #     direction=+1
     # )
-	
-	# # 右下->左上
+
+    # # 右下->左上
     # line2 = VerticalLine(
     #     x=0.0,
     #     y_start=0.0,
     #     y_end=4000.0,
-    #     direction=+1
     # )
-
+    #
     # line1 = VerticalLine(
     #     x=300.0,
     #     y_start=4500.0,
     #     y_end=900.0,
-    #     direction=-1
     # )
 
     L_out = 300.0
