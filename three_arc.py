@@ -105,7 +105,16 @@ def solve_w_lt_2r_three_arc(
             print(f"[W<2R THREE-ARC] invalid: headings are not opposite enough, dot={heading_dot:.6f}")
         return ThreeArcTurnPath(valid=False)
 
-    y_turn = max(y1, y2)
+    # 根据起止航向的Y分量决定转弯侧：
+    # h1y > 0 (朝上) → 顶部转弯 → y_turn = max, C2 在上方
+    # h1y < 0 (朝下) → 底部转弯 → y_turn = min, C2 在下方
+    if h1y > 0:
+        y_turn = max(y1, y2)
+        turn_side = 1
+    else:
+        y_turn = min(y1, y2)
+        turn_side = -1
+
     turn_start = Point(x1, y_turn)
     turn_end = Point(x2, y_turn)
 
@@ -122,10 +131,18 @@ def solve_w_lt_2r_three_arc(
     pre_straight = distance(start_state.p, turn_start)
     post_straight = distance(turn_end, end_state.p)
 
-    if x2 > x1:
-        sequence = "LRL"
+    # 顶部转弯 (h1y>0): x2>x1 → LRL, x2<x1 → RLR
+    # 底部转弯 (h1y<0): 镜像翻转序列, x2>x1 → RLR, x2<x1 → LRL
+    if turn_side > 0:
+        if x2 > x1:
+            sequence = "LRL"
+        else:
+            sequence = "RLR"
     else:
-        sequence = "RLR"
+        if x2 > x1:
+            sequence = "RLR"
+        else:
+            sequence = "LRL"
 
     cosQ = (W / 2.0 + R) / (2.0 * R)
     cosQ = max(-1.0, min(1.0, cosQ))
@@ -137,13 +154,13 @@ def solve_w_lt_2r_three_arc(
     if x2 > x1:
         c1 = Point(x1 - R, y_turn)
         c3 = Point(x2 + R, y_turn)
-        c2 = Point(xm, y_turn + h)
-        turn1, turn2, turn3 = 'L', 'R', 'L'
+        c2 = Point(xm, y_turn + turn_side * h)
     else:
         c1 = Point(x1 + R, y_turn)
         c3 = Point(x2 - R, y_turn)
-        c2 = Point(xm, y_turn + h)
-        turn1, turn2, turn3 = 'R', 'L', 'R'
+        c2 = Point(xm, y_turn + turn_side * h)
+
+    turn1, turn2, turn3 = sequence[0], sequence[1], sequence[2]
 
     v12 = normalize(c2.x - c1.x, c2.y - c1.y)
     v32 = normalize(c2.x - c3.x, c2.y - c3.y)
