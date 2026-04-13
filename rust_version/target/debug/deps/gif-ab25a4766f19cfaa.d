@@ -1,0 +1,11 @@
+D:\project\py\cexian\rust_version\target\debug\deps\gif-ab25a4766f19cfaa.d: C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\lib.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\traits.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\common.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\reader\mod.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\reader\decoder.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\encoder.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\../README.md
+
+D:\project\py\cexian\rust_version\target\debug\deps\libgif-ab25a4766f19cfaa.rmeta: C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\lib.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\traits.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\common.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\reader\mod.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\reader\decoder.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\encoder.rs C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\../README.md
+
+C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\lib.rs:
+C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\traits.rs:
+C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\common.rs:
+C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\reader\mod.rs:
+C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\reader\decoder.rs:
+C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\encoder.rs:
+C:\Users\COFG-TSD\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\gif-0.12.0\src\../README.md:
