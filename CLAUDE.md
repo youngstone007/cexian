@@ -1,150 +1,692 @@
+下面是我按**你当前项目真实结构与当前实现逻辑**整理后的 `CLAUDE.md` 完整版本。  
+你可以直接覆盖原文件。
+
+```markdown
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (`claude.ai/code`) when working with code in this repository.
 
-此文件为 Claude Code (claude.ai/code) 在本代码库中工作提供指导。
+此文件为 Claude Code (`claude.ai/code`) 在本代码库中工作提供指导。
+
+---
 
 ## Overview / 概述
 
-This repository contains a geometric path planning algorithm for ship lane switching between parallel survey lines. The algorithm handles three scenarios based on the distance between lines (W) relative to the ship's minimum turning radius (R):
+This repository implements a geometric path planning and global route optimization system for ship lane switching between **parallel vertical survey lines**.
 
-本代码库包含一个用于船舶在平行测线之间换线的几何路径规划算法。该算法根据测线间距(W)相对于船舶最小转弯半径(R)的关系处理三种场景：
+本代码库实现了一个面向**平行竖直测线**的船舶换线几何求解与全局路线优化系统。
 
-1. **W > 2R**: Uses Dubins CSC (LSL/RSR) paths with external/internal tangents.
-   **W > 2R**: 使用 Dubins CSC (LSL/RSR) 路径，采用外切/内切公切线。
+The project contains two tightly coupled parts:
 
-2. **W = 2R**: Uses a semicircular turn with straight approach/departure segments.
-   **W = 2R**: 使用半圆形转弯，带有直线接近/离开段。
+本项目包含两个紧密相关的部分：
 
-3. **W < 2R**: Uses a fixed symmetric three‑arc template (LRL or RLR) with optional straight extensions.
-   **W < 2R**: 使用固定的对称三圆弧模板 (LRL 或 RLR)，带有可选的直线延伸段。
+1. **Local turn geometry solver**  
+   Computes the feasible turn path between two survey lines while considering:
+   - fixed minimum turning radius $R$
+   - run-out distance `L_out`
+   - run-in distance `L_in`
+   - fixed heading at both ends
 
-The code is a single‑file Python implementation (`main.py`) with dataclasses for geometric entities, pure geometric functions, solvers for each scenario, and visualization using matplotlib.
+   **局部换线几何求解器**  
+   在以下约束下，计算两条测线之间的可行换线路径：
+   - 固定最小转弯半径 $R$
+   - `Run out` 距离 `L_out`
+   - `Run in` 距离 `L_in`
+   - 起终点航向固定
 
-代码是单文件的 Python 实现 (`main.py`)，包含用于几何实体的数据类、纯几何函数、每种场景的求解器，以及使用 matplotlib 的可视化功能。
+2. **Global planner**  
+   Optimizes the visiting order of many survey lines using:
+   - expert-rule spatial partitioning
+   - same-direction constraints inside spatial blocks
+   - interleaving access between neighboring blocks
+   - simulated annealing (SA) + dynamic programming (DP)
 
-## Common Development Tasks / 常用开发任务
+   **全局规划器**  
+   对多条测线的访问顺序进行优化，结合：
+   - 专家经验法空间分块
+   - 区块内同向约束
+   - 相邻区块交错访问
+   - 模拟退火（SA）+ 动态规划（DP）
 
-### Running the Example / 运行示例
+---
+
+## Current Repository Structure / 当前代码结构
+
+The repository is now a **multi-file Python project**, not a single-file implementation.
+
+当前代码库已经是**多文件 Python 项目**，不再是单文件实现。
+
+```text
+project/
+├── common.py         # 基础数据结构、几何常量、采样函数
+├── dubins_csc.py     # W > 2R 场景：Dubins CSC (LSL/RSR)
+├── semicircle.py     # W = 2R 场景：半圆换线
+├── three_arc.py      # W < 2R 场景：固定对称三圆弧换线
+├── planner.py        # 全局规划器：空间分块、候选生成、SA+DP
+├── main.py           # 示例入口、打印结果、可视化绘图
+├── README.md         # 项目说明文档（若存在）
+└── CLAUDE.md         # 当前说明文件
+```
+
+---
+
+## Core Problem / 核心问题
+
+The project studies how a ship switches from one survey line to another adjacent or non-adjacent parallel survey line while keeping the towing system operationally valid.
+
+本项目研究船舶如何从一条测线切换到另一条相邻或非相邻平行测线，并保证拖缆系统满足作业要求。
+
+Key constraints:
+
+关键约束包括：
+
+- Survey lines are parallel and vertical.
+  测线相互平行，且在当前实现中均为竖直线。
+
+- The ship must continue along the current line direction for a `Run out` distance after finishing data acquisition.
+  船舶完成当前测线采集后，必须继续沿当前测线方向航行一段 `Run out` 距离。
+
+- Before entering the next line for acquisition, the ship must travel along that line direction for a `Run in` distance so the tow cable is straightened and aligned with the survey line.
+  在进入目标测线正式采集前，船舶必须预留一段 `Run in` 距离，使拖缆被拉直并与目标测线平行。
+
+- Turn geometry is planned between the **EOL geometric point** and the **SOL geometric point**.
+  换线几何是在 **EOL 几何点** 与 **SOL 几何点** 之间求解的。
+
+---
+
+## Geometry Conventions / 几何约定
+
+### AB / CD Side Convention / AB / CD 侧别约定
+
+The current project uses **side-based line entry/exit modeling**.
+
+当前项目使用**基于侧别的测线进出建模**。
+
+For each vertical survey line:
+
+对于每条竖直测线：
+
+- `AB` side = lower endpoint = `y_start`
+- `CD` side = upper endpoint = `y_end`
+
+That means:
+
+这意味着：
+
+- Entering from `AB` means the ship travels upward along the line, i.e. along $+Y$.
+  从 `AB` 侧进入表示船舶沿测线上行，即沿 $+Y$ 方向施工。
+
+- Entering from `CD` means the ship travels downward along the line, i.e. along $-Y$.
+  从 `CD` 侧进入表示船舶沿测线下行，即沿 $-Y$ 方向施工。
+
+- A line entered from `AB` exits from `CD`.
+  从 `AB` 侧进入的测线最终从 `CD` 侧离开。
+
+- A line entered from `CD` exits from `AB`.
+  从 `CD` 侧进入的测线最终从 `AB` 侧离开。
+
+This convention is central to both the local turn solvers and the global planner.
+
+这一约定同时是局部换线求解器与全局规划器的核心基础。
+
+---
+
+### EOL / SOL Definitions / EOL / SOL 定义
+
+#### EOL data point / EOL 数据点
+
+The End-Of-Line data point is the actual survey exit point on the current line.
+
+EOL 数据点是当前测线上的实际采集结束点。
+
+Its location depends on the current line direction:
+
+其位置由当前测线施工方向决定：
+
+- upward line: EOL is on `CD`
+- downward line: EOL is on `AB`
+
+#### EOL geometric point / EOL 几何点
+
+The EOL geometric point is obtained by extending from the EOL data point along the current heading by `L_out`.
+
+EOL 几何点是从 EOL 数据点沿当前航向继续前进 `L_out` 后得到的点。
+
+This is the actual start of turn geometry.
+
+它是换线几何的实际起点。
+
+#### SOL data point / SOL 数据点
+
+The Start-Of-Line data point is the actual acquisition start point on the target line.
+
+SOL 数据点是目标测线上的实际采集起始点。
+
+Its location depends on the target line direction:
+
+其位置由目标测线施工方向决定：
+
+- upward line: SOL is on `AB`
+- downward line: SOL is on `CD`
+
+#### SOL geometric point / SOL 几何点
+
+The SOL geometric point is obtained by moving backward from the SOL data point, against the target line heading, by `L_in`.
+
+SOL 几何点是从 SOL 数据点沿目标航向反方向回退 `L_in` 后得到的点。
+
+This is the actual end of turn geometry.
+
+它是换线几何的实际终点。
+
+---
+
+## Three Turn Scenarios / 三类换线场景
+
+The local turn solver handles three scenarios depending on the relationship between line spacing $W$ and turning radius $R$.
+
+局部换线求解器根据测线间距 $W$ 与转弯半径 $R$ 的关系处理三类场景。
+
+### 1. $W > 2R$
+
+Use Dubins CSC paths.
+
+使用 Dubins CSC 路径。
+
+Current implementation compares:
+
+当前实现比较：
+
+- `LSL`
+- `RSR`
+
+and chooses the shorter feasible one.
+
+并在可行解中取更短者。
+
+Path structure:
+
+路径结构：
+
+$$
+\text{Run out} \to \text{arc} \to \text{tangent line} \to \text{arc} \to \text{Run in}
+$$
+
+---
+
+### 2. $W = 2R$
+
+Use a semicircle-based turn.
+
+使用半圆换线模型。
+
+The tangent line degenerates, so the ship turns through a semicircle, optionally preceded or followed by straight segments.
+
+由于公切线退化，船舶通过半圆完成换线，必要时在前后补充直线段。
+
+Path structure:
+
+路径结构：
+
+$$
+\text{Run out} \to \text{pre-straight} \to \text{semicircle} \to \text{post-straight} \to \text{Run in}
+$$
+
+---
+
+### 3. $W < 2R$
+
+Use a fixed symmetric three-arc template.
+
+使用固定对称三圆弧模板。
+
+Current implementation uses:
+
+当前实现使用：
+
+- `LRL`
+- `RLR`
+
+depending on left-to-right or right-to-left switching.
+
+根据左右换线方向选择 `LRL` 或 `RLR`。
+
+Path structure:
+
+路径结构：
+
+$$
+\text{Run out} \to \text{pre-straight} \to \text{three-arc template} \to \text{post-straight} \to \text{Run in}
+$$
+
+---
+
+## Global Planning Model / 全局规划模型
+
+The current planner is no longer a simple random or Q-learning route chooser.
+
+当前规划器已经不再是简单的随机或 Q-learning 路线选择器。
+
+It is a structured global planner based on:
+
+它是一个结构化的全局规划器，核心包括：
+
+1. **Expert-rule spatial partitioning**
+   - Survey lines are partitioned into spatial blocks according to maximum allowable span.
+   - 测线先根据最大允许横向跨度划分为空间块。
+
+2. **Refined block pairing**
+   - Raw spatial blocks may be subdivided so they can be paired feasibly.
+   - 原始空间块会在必要时进一步细分，以保证可配对交错访问。
+
+3. **Same-direction inside block**
+   - All lines inside one refined block share one direction.
+   - 每个细分块内部所有测线方向一致。
+
+4. **Interleaving between paired blocks**
+   - Neighboring paired blocks are accessed in an interleaved way.
+   - 配对的相邻细分块之间采用交错访问。
+
+5. **Global optimization over work units**
+   - Work-unit order is optimized using SA.
+   - For a fixed unit order, candidate chaining is solved by DP.
+   - 工作单元顺序由 SA 优化；
+   - 固定顺序下的候选拼接由 DP 精确求解。
+
+This design is important: do **not** describe the current planner as “block-internal TSP only”.
+
+这一点非常重要：**不要**再把当前规划器描述成“仅仅是块内 TSP”。
+
+---
+
+## Main Entry Points / 主要入口
+
+### `main.py`
+
+This is the example and visualization entry.
+
+这是示例运行与可视化入口。
+
+Typical usage:
+
+典型运行方式：
 
 ```bash
 python main.py
 ```
 
-This executes the demonstration at the bottom of `main.py`, which:
+It typically:
 
-这将执行 `main.py` 底部的演示，该演示：
+它通常会：
 
-- Defines two vertical survey lines (`line1`, `line2`), run‑out/run‑in distances (`L_out`, `L_in`), turning radius `R`, and ship speed.
-  定义两条垂直测线 (`line1`, `line2`)、驶出/驶入距离 (`L_out`, `L_in`)、转弯半径 `R` 和船舶速度。
+- generate many parallel survey lines
+- call `plan_route(...)`
+- print the route and turn details
+- compare with random routes
+- plot the final route map and turn-distance bar chart
 
-- Determines which scenario applies based on `W = |line2.x - line1.x|`.
-  根据 `W = |line2.x - line1.x|` 确定适用的场景。
+即：
 
-- Calls the appropriate solver and prints the resulting path parameters.
-  调用相应的求解器并打印结果路径参数。
+- 生成多条平行测线
+- 调用 `plan_route(...)`
+- 打印全局航线与换线详情
+- 与随机路线进行对比
+- 输出航线图和换线距离柱状图
 
-- Generates a plot of the turn solution and saves it as a PNG file (e.g., `turn_solution_w_lt_2r_three_arc_v2.png`).
-  生成转弯解决方案的图表并保存为 PNG 文件（例如 `turn_solution_w_lt_2r_three_arc_v2.png`）。
+---
 
-### Dependencies / 依赖项
+### `planner.plan_route(...)`
 
-The only external dependency is **matplotlib** for plotting. Install it with:
+This is the main global planning API.
 
-唯一的外部依赖是用于绘图的 **matplotlib**。使用以下命令安装：
+这是当前全局规划的主要接口。
+
+Typical parameters:
+
+常用参数包括：
+
+- `lines`
+- `R`
+- `L_out`
+- `L_in`
+- `speed`
+- `max_heading_angle_deg`
+- `block_top_k`
+- `global_sa_restarts`
+- `global_sa_steps`
+- `debug`
+
+---
+
+## Important Modules / 关键模块
+
+### `common.py`
+
+Contains fundamental geometric data structures and sampling helpers.
+
+包含基础几何数据结构与路径采样辅助函数。
+
+Typical contents:
+
+典型内容包括：
+
+- `Point`
+- `VerticalLine`
+- `EPS`
+- `sample_arc(...)`
+- `sample_line(...)`
+
+---
+
+### `dubins_csc.py`
+
+Solver for the $W > 2R$ case.
+
+用于 $W > 2R$ 场景的求解器。
+
+Typical responsibility:
+
+典型职责：
+
+- fixed-head and fixed-tail Dubins CSC turn construction
+- LSL / RSR candidate solving
+- shortest feasible CSC selection
+
+---
+
+### `semicircle.py`
+
+Solver for the $W = 2R$ case.
+
+用于 $W = 2R$ 场景的半圆换线求解器。
+
+---
+
+### `three_arc.py`
+
+Solver for the $W < 2R$ case.
+
+用于 $W < 2R$ 场景的三圆弧换线求解器。
+
+---
+
+### `planner.py`
+
+This is the most important orchestration module.
+
+这是当前最核心的规划调度模块。
+
+It includes:
+
+它包括：
+
+- turn distance abstraction
+- expert-rule block partitioning
+- refined block generation
+- unit candidate generation
+- interleaving construction
+- work-unit connector building
+- SA over unit order
+- DP over candidate chain
+- final route assembly
+
+即：
+
+- 换线距离统一封装
+- 专家经验法分块
+- 细分块生成
+- 工作单元候选生成
+- 区块交错访问构造
+- 工作单元连接器构造
+- 单元顺序 SA 优化
+- 候选链 DP 求解
+- 最终全局路线拼装
+
+---
+
+## Common Development Tasks / 常用开发任务
+
+### Run the demo / 运行示例
+
+```bash
+python main.py
+```
+
+---
+
+### Install dependencies / 安装依赖
+
+The main external dependency is **matplotlib** for plotting.
+
+当前主要外部依赖是用于绘图的 **matplotlib**。
 
 ```bash
 pip install matplotlib
 ```
 
-No other third‑party packages are required; the code uses only the Python standard library (`math`, `dataclasses`, `typing`).
+The rest of the code uses only the Python standard library.
 
-不需要其他第三方包；代码仅使用 Python 标准库 (`math`, `dataclasses`, `typing`)。
+其余部分主要依赖 Python 标准库。
 
-### Testing / 测试
+---
 
-There are no formal unit tests in the repository. To verify correctness, you can:
+### Debugging / 调试
 
-代码库中没有正式的单元测试。要验证正确性，您可以：
+Useful debugging methods:
 
-1. Run the example and inspect the generated plot.
-   运行示例并检查生成的图表。
+常见调试方式包括：
 
-2. Modify the parameters in the `if __name__ == "__main__"` block and observe how the algorithm adapts to different W/R ratios.
-   修改 `if __name__ == "__main__"` 块中的参数，观察算法如何适应不同的 W/R 比值。
+1. Set `debug=True` in `plan_route(...)`.
+   在 `plan_route(...)` 中设置 `debug=True`。
 
-3. Add debug prints by passing `debug=True` to the solver functions (e.g., `solve_fixed_head_tail_turn_between_vertical_lines(..., debug=True)`).
-   通过向求解器函数传递 `debug=True` 添加调试打印（例如 `solve_fixed_head_tail_turn_between_vertical_lines(..., debug=True)`）。
+2. Inspect:
+   - spatial blocks
+   - refined block sizes
+   - generated unit candidates
+   - chosen global unit order
 
-### Code Structure / 代码结构
+   查看：
+   - 空间块划分
+   - 细分块尺寸
+   - 工作单元候选
+   - 最终全局工作单元顺序
 
-- **Data classes** (`Point`, `State`, `VerticalLine`, `DubinsPath`, `SemicircleTurnPath`, `ThreeArcTurnPath`, and associated `*Candidate` classes) define the geometric state and solution outputs.
-  **数据类** (`Point`, `State`, `VerticalLine`, `DubinsPath`, `SemicircleTurnPath`, `ThreeArcTurnPath` 以及相关的 `*Candidate` 类) 定义几何状态和解决方案输出。
+3. Check the plotted route map.
+   查看输出的航线图。
 
-- **Geometric utilities**: `distance`, `mod2pi`, `left_normal`, `right_normal`, `polar_angle`, `compute_arc_angle`, `turning_circle_center`, `normalize`, `point_is_ahead_along_heading`.
-  **几何工具函数**: `distance`, `mod2pi`, `left_normal`, `right_normal`, `polar_angle`, `compute_arc_angle`, `turning_circle_center`, `normalize`, `point_is_ahead_along_heading`。
+---
 
-- **Tangent‑consistency checking**: `tangent_direction_on_circle`, `tangent_direction_is_consistent`.
-  **切线一致性检查**: `tangent_direction_on_circle`, `tangent_direction_is_consistent`。
+## Testing / 测试
 
-- **CSC tangent solvers**: `solve_outer_tangent`, `solve_inner_tangent`, `solve_one_csc_path`, `shortest_dubins_csc`.
-  **CSC 切线求解器**: `solve_outer_tangent`, `solve_inner_tangent`, `solve_one_csc_path`, `shortest_dubins_csc`。
+There is currently **no formal unit test suite**.
 
-- **Line‑point construction**: `point_on_vertical_line`, `build_eol_geom`, `build_sol_geom_fixed_head`.
-  **测线点构造**: `point_on_vertical_line`, `build_eol_geom`, `build_sol_geom_fixed_head`。
+当前代码库**没有正式单元测试**。
 
-- **Scenario‑specific solvers** / **场景特定求解器**:
-  - `solve_fixed_head_tail_turn_between_vertical_lines` – for W > 2R. / 用于 W > 2R。
-  - `solve_w_eq_2r_semicircle` and `solve_fixed_head_tail_w_eq_2r_semicircle_turn` – for W = 2R. / 用于 W = 2R。
-  - `solve_w_lt_2r_three_arc` and `solve_fixed_head_tail_w_lt_2r_three_arc_turn` – for W < 2R. / 用于 W < 2R。
+To validate behavior:
 
-- **Printing and visualization**: `print_result`, `print_semicircle_result`, `print_three_arc_result`, `plot_turn_solution`, `plot_semicircle_turn_solution`, `plot_three_arc_turn_solution`.
-  **打印和可视化**: `print_result`, `print_semicircle_result`, `print_three_arc_result`, `plot_turn_solution`, `plot_semicircle_turn_solution`, `plot_three_arc_turn_solution`。
+可通过以下方式验证行为：
 
-### Key Assumptions and Conventions / 关键假设和约定
+1. Run `main.py` and inspect the generated route map.
+   运行 `main.py` 并检查生成的航线图。
 
-- Survey lines are **vertical** (parallel to the Y‑axis) and defined by `x`, `y_start`, `y_end`, and a `direction` (+1 for +Y, -1 for -Y).
-  测线是**垂直的**（平行于 Y 轴），由 `x`, `y_start`, `y_end` 和 `direction` 定义（+1 表示 +Y 方向，-1 表示 -Y 方向）。
+2. Change:
+   - line spacing $W$
+   - turning radius $R$
+   - `L_out`
+   - `L_in`
+   - block parameters
 
-- The ship exits the first line at its **end‑of‑line (EOL)** data point (`y_end`) and must travel a **run‑out distance** `L_out` before beginning the turn.
-  船舶在第一条测线的**线尾 (EOL)** 数据点 (`y_end`) 退出，必须在开始转弯前行驶**驶出距离** `L_out`。
+   修改：
+   - 测线间距 $W$
+   - 转弯半径 $R$
+   - `L_out`
+   - `L_in`
+   - 分块参数
 
-- The ship enters the second line at its **start‑of‑line (SOL)** data point (`y_start`) but must first travel a **run‑in distance** `L_in` along the line to straighten the tow cable.
-  船舶在第二条测线的**线头 (SOL)** 数据点 (`y_start`) 进入，但必须首先沿测线行驶**驶入距离** `L_in` 以拉直拖缆。
+3. Verify the planner still produces:
+   - feasible route
+   - same-direction blocks
+   - sensible interleaving
+   - improved total turn distance
 
-- The **EOL geometric point** is `L_out` beyond the EOL data point along the line's heading; the **SOL geometric point** is `L_in` before the SOL data point along the line's heading.
-  **EOL 几何点**是沿测线航向超出 EOL 数据点 `L_out` 的点；**SOL 几何点**是沿测线航向在 SOL 数据点之前 `L_in` 的点。
+   验证规划器是否仍然产生：
+   - 可行路线
+   - 区块内同向
+   - 合理交错访问
+   - 更优总换线距离
 
-- The turn is planned between the two geometric points, with the ship's heading at each point equal to the line's heading.
-  转弯计划在两个几何点之间进行，船舶在每个点的航向等于测线的航向。
+---
 
-- All angles are in radians, distances in consistent units (e.g., meters), speed in distance‑per‑time.
-  所有角度单位为弧度，距离单位为一致的单位（例如米），速度单位为距离/时间。
+## Important Assumptions / 重要假设
 
-### Extending the Code / 扩展代码
+1. **Survey lines are vertical.**  
+   Current line geometry assumes vertical lines only.
 
-- To handle **non‑vertical lines**, modify `VerticalLine` and the point‑construction functions.
-  要处理**非垂直测线**，请修改 `VerticalLine` 和点构造函数。
+   **测线为竖直线。**  
+   当前实现只考虑竖直测线。
 
-- To add **more Dubins path types** (e.g., CCC), extend `shortest_dubins_csc` with additional solvers.
-  要添加**更多 Dubins 路径类型**（例如 CCC），请使用额外的求解器扩展 `shortest_dubins_csc`。
+2. **Turn radius is fixed.**  
+   All turn construction is based on one fixed minimum turning radius $R$.
 
-- To **change the optimization criterion** (currently shortest path length), adjust the `total_cost` field in the candidate classes.
-  要**更改优化标准**（当前为最短路径长度），请调整候选类中的 `total_cost` 字段。
+   **转弯半径固定。**  
+   所有换线几何均基于固定最小转弯半径 $R$。
 
-- To **integrate the solver into a larger system**, import the relevant functions and call them with your own line/parameter objects.
-  要**将求解器集成到更大的系统中**，请导入相关函数并使用您自己的测线/参数对象调用它们。
+3. **Run-out and Run-in are mandatory.**  
+   They are part of the operational path model, not optional visualization decorations.
 
-## Notes for Maintainers / 维护者注意事项
+   **Run out 与 Run in 是强制约束。**  
+   它们是作业路径模型的一部分，不只是可视化装饰。
 
-- The code is written in English with Chinese comments; keep both for clarity.
-  代码用英文编写，带有中文注释；为清晰起见，请保留两者。
+4. **Turn geometry is solved between geometric points, not data points.**  
+   The actual local solver starts at EOL geometric point and ends at SOL geometric point.
 
-- There are no configuration files, build scripts, or test suites. Consider adding a `requirements.txt` and a simple test module if the project grows.
-  没有配置文件、构建脚本或测试套件。如果项目增长，请考虑添加 `requirements.txt` 和简单的测试模块。
+   **换线几何是在几何点之间求解，不是在数据点之间直接求解。**
 
-- The visualization functions assume a Cartesian coordinate system with equal aspect ratio; they are meant for debugging and presentation, not for production use.
-  可视化函数假设使用等比例的笛卡尔坐标系；它们用于调试和演示，不用于生产环境。
+5. **Current side connection model is same-side only.**  
+   The planner currently relies on:
+   - `AB -> AB`
+   - `CD -> CD`
 
-- All geometric tolerances are controlled by `EPS` and `DOT_TOL` global constants; adjust them if numerical issues arise.
-  所有几何公差由全局常量 `EPS` 和 `DOT_TOL` 控制；如果出现数值问题，请调整它们。
+   **当前连接模型仍然是同侧连接。**  
+   当前规划器主要依赖：
+   - `AB -> AB`
+   - `CD -> CD`
+
+6. **Global same-direction blocks are realized by interleaving**, not by forcing one spatial block to be traversed as a single contiguous subsequence.
+
+   **全局“块内同向”是通过交错访问实现的**，而不是强制一个空间块在访问序列中连续跑完。
+
+---
+
+## When Modifying Code / 修改代码时的注意事项
+
+### If working on local geometry solvers / 如果修改局部几何求解器
+
+Be careful to preserve:
+
+请务必保持：
+
+- heading continuity
+- tangent consistency
+- correct use of `L_out` / `L_in`
+- scenario boundary logic at $W = 2R$
+
+即：
+
+- 航向连续
+- 切线一致性
+- `L_out` / `L_in` 使用正确
+- $W = 2R$ 边界逻辑正确
+
+Do not casually change the geometric interpretation of EOL/SOL points.
+
+不要随意改变 EOL / SOL 几何点的定义。
+
+---
+
+### If working on `planner.py` / 如果修改 `planner.py`
+
+Remember that the current planner is based on:
+
+请牢记当前规划器的核心是：
+
+- spatial partitioning
+- refined pairable blocks
+- same-direction inside refined blocks
+- interleaving between block pairs
+- SA + DP at the global level
+
+Do not revert the code to a “block internal TSP” interpretation unless explicitly intended.
+
+除非明确需要，否则不要退回到“块内 TSP”式建模。
+
+---
+
+### If working on visualization / 如果修改可视化
+
+Current visualization may contain:
+
+当前可视化可能包含：
+
+- survey lines
+- turn path
+- run-out overlays
+- run-in overlays
+- start marker
+- bar chart of turn distance
+
+When adjusting plotting order, pay attention to `zorder`.
+
+修改绘图层级时，要特别注意 `zorder`。
+
+---
+
+## Extending the Project / 扩展项目
+
+Possible future extensions:
+
+未来可扩展方向包括：
+
+- non-vertical lines
+- obstacle-aware planning
+- additional Dubins path families
+- more exact global optimization
+- formal test suite
+- better separation of pure turn geometry vs run-out/run-in in visualization
+
+即：
+
+- 非竖直测线
+- 障碍物约束
+- 更多 Dubins 路径类型
+- 更精确的全局优化
+- 正式测试模块
+- 在可视化中更彻底地区分纯转弯段与 Run-out / Run-in
+
+---
+
+## Notes for Maintainers / 维护者说明
+
+- Keep comments bilingual where practical.
+  尽量保留中英文双语注释。
+
+- Prefer preserving current naming conventions:
+  - `AB`, `CD`
+  - `EOL`, `SOL`
+  - `Run out`, `Run in`
+  - `UP`, `DOWN`
+
+  尽量保持当前命名约定：
+  - `AB`, `CD`
+  - `EOL`, `SOL`
+  - `Run out`, `Run in`
+  - `UP`, `DOWN`
+
+- If repository structure changes again, update this file accordingly.
+  若仓库结构后续再次变化，请同步更新本文件。
+
+- If README and implementation disagree, prefer the **actual code behavior** and update documentation.
+  如果 README 与实现不一致，应以**当前代码实际行为**为准，并及时更新文档。
+
+---
+```
