@@ -12,19 +12,23 @@ Ship lane switching optimization for marine seismic exploration (towed-streamer 
 ## Commands
 
 ```bash
-# Install dependencies (only matplotlib; rest is stdlib)
+# Python version
 pip install -r requirements.txt
+python main.py              # Run demo, generates route_map.png + route_bar_chart.png
 
-# Run the demo (generates lines, runs planner, prints results, produces route map + bar chart)
-python main.py
+# Rust version (in progress)
+cd rust_version
+cargo build --release
+cargo run
 ```
 
-No formal test suite exists. Validation is done by running `main.py` and inspecting output plots.
+No formal test suite. Validation: run `main.py` and inspect output plots.
 
 ## Architecture
 
-Module dependency graph (strictly layered, no circular imports):
+The project has **two implementations**:
 
+### Python (primary)
 ```
 common.py              Foundation: Point, State, VerticalLine, EPS, sampling/plotting helpers
   ├── survey.py        Normalize arbitrary parallel lines to vertical-line coordinate system
@@ -32,9 +36,12 @@ common.py              Foundation: Point, State, VerticalLine, EPS, sampling/plo
   ├── semicircle.py    W = 2R solver: semicircle turn
   └── three_arc.py     W < 2R solver: fixed symmetric three-arc (LRL/RLR)
         └── planner.py Global orchestrator: spatial partitioning → block refinement →
-                       work-unit candidates → interleaving → SA (unit order) + DP (candidate chain) → route assembly
+                       work-unit candidates → interleaving → SA + DP → route assembly
               └── main.py  Entry point, visualization, random-route comparison
 ```
+
+### Rust (rust_version/)
+Port in progress. Modules mirror Python: `common.rs`, `dubins_csc.rs`, `semicircle.rs`, `three_arc.rs`, `survey.rs`. Planner module not yet ported.
 
 ### Solver pattern
 
